@@ -18,6 +18,8 @@ locals {
 }
 
 data "aws_iam_policy_document" "cross_account_policy" {
+
+  # IAM roles — ListBucket (only if roles exist)
   dynamic "statement" {
     for_each = local.has_role_principals && var.allow_list ? [1] : []
     content {
@@ -42,4 +44,73 @@ data "aws_iam_policy_document" "cross_account_policy" {
       }
     }
   }
+
+  # IAM roles — Read objects (only if roles exist)
+  dynamic "statement" {
+    for_each = local.has_role_principals ? [1] : []
+    content {
+      sid    = "AllowCrossAccountReadObjects"
+      effect = "Allow"
+
+      principals {
+        type        = "AWS"
+        identifiers = local.principal_role_arns
+      }
+
+      actions   = local.read_object_actions
+      resources = local.object_arns
+    }
+  }
+
+  # IAM roles — Write objects (only if roles exist AND access=readwrite)
+  dynamic "statement" {
+    for_each = local.has_role_principals && var.access == "readwrite" ? [1] : []
+    content {
+      sid    = "AllowCrossAccountWriteObjects"
+      effect = "Allow"
+
+      principals {
+        type        = "AWS"
+        identifiers = local.principal_role_arns
+      }
+
+      actions   = local.write_object_actions
+      resources = local.object_arns
+    }
+  }
+
+  # CloudFront statement (only if cloudfront_access provided)
+  dynamic "statement" {
+    for_each = local.has_cloudfront ? [var.cloudfront_access] : []
+    content {
+      sid    = "AllowCloudFrontReadObjects"
+      effect = "Allow"
+
+      principals {
+        type        = "Service"
+        identifiers = ["cloudfront.amazonaws.com"]
+      }
+
+      actions   = statement.value.actions
+      resources = local.object_arns
+
+      condition {
+        test     = "StringEquals"
+        variable = "AWS:SourceAccount"
+        values   = [statement.value.source_account_id]
+      }
+
+      condition {
+        test     = "ArnLike"
+        variable = "AWS:SourceArn"
+        values = [
+          coalesce(
+            try(statement.value.source_arn_like, null),
+            "arn:aws:cloudfront::${statement.value.source_account_id}:distribution/*"
+          )
+        ]
+      }
+    }
+  }
+
 }
